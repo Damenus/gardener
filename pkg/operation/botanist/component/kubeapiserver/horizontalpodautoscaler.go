@@ -16,6 +16,7 @@ package kubeapiserver
 
 import (
 	"context"
+	"fmt"
 
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/controllerutils"
@@ -36,21 +37,38 @@ const (
 	hpaTargetAverageUtilizationMemory int32 = 80
 )
 
-func (k *kubeAPIServer) getHorizontalPodAutoscaler(deployment *appsv1.Deployment) client.Object {
+func (k *kubeAPIServer) emptyHorizontalPodAutoscaler() client.Object {
 	hpaObjectMeta := metav1.ObjectMeta{
 		Name:      v1beta1constants.DeploymentNameKubeAPIServer,
 		Namespace: k.namespace,
 	}
 
 	if version.ConstraintK8sGreaterEqual123.Check(k.values.Version) {
-		if deployment == nil {
-			return &autoscalingv2.HorizontalPodAutoscaler{
-				ObjectMeta: hpaObjectMeta,
-			}
-		}
 		return &autoscalingv2.HorizontalPodAutoscaler{
 			ObjectMeta: hpaObjectMeta,
-			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+		}
+	}
+	return &autoscalingv2beta1.HorizontalPodAutoscaler{
+		ObjectMeta: hpaObjectMeta,
+	}
+}
+
+func (k *kubeAPIServer) reconcileHorizontalPodAutoscaler(ctx context.Context, obj client.Object, deployment *appsv1.Deployment) error {
+	if k.values.Autoscaling.HVPAEnabled ||
+		k.values.Autoscaling.Replicas == nil ||
+		*k.values.Autoscaling.Replicas == 0 {
+
+		return kutil.DeleteObject(ctx, k.client.Client(), obj)
+	}
+
+	var err error
+	if version.ConstraintK8sGreaterEqual123.Check(k.values.Version) {
+		hpaV2, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler)
+		if !ok {
+			return fmt.Errorf("expected autoscalingv2.HorizontalPodAutoscaler but got %T", obj)
+		}
+		_, err = controllerutils.GetAndCreateOrMergePatch(ctx, k.client.Client(), hpaV2, func() error {
+			hpaV2.Spec = autoscalingv2.HorizontalPodAutoscalerSpec{
 				MinReplicas: &k.values.Autoscaling.MinReplicas,
 				MaxReplicas: k.values.Autoscaling.MaxReplicas,
 				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
@@ -80,54 +98,42 @@ func (k *kubeAPIServer) getHorizontalPodAutoscaler(deployment *appsv1.Deployment
 						},
 					},
 				},
-			},
+			}
+			return nil
+		})
+	} else {
+		hpaV2beta1, ok := obj.(*autoscalingv2beta1.HorizontalPodAutoscaler)
+		if !ok {
+			return fmt.Errorf("expected  autoscalingv2beta1.HorizontalPodAutoscaler but got %T", obj)
 		}
-	}
-	if deployment == nil {
-		return &autoscalingv2beta1.HorizontalPodAutoscaler{
-			ObjectMeta: hpaObjectMeta,
-		}
-	}
-	return &autoscalingv2beta1.HorizontalPodAutoscaler{
-		ObjectMeta: hpaObjectMeta,
-		Spec: autoscalingv2beta1.HorizontalPodAutoscalerSpec{
-			MinReplicas: &k.values.Autoscaling.MinReplicas,
-			MaxReplicas: k.values.Autoscaling.MaxReplicas,
-			ScaleTargetRef: autoscalingv2beta1.CrossVersionObjectReference{
-				APIVersion: appsv1.SchemeGroupVersion.String(),
-				Kind:       "Deployment",
-				Name:       deployment.Name,
-			},
-			Metrics: []autoscalingv2beta1.MetricSpec{
-				{
-					Type: autoscalingv2beta1.ResourceMetricSourceType,
-					Resource: &autoscalingv2beta1.ResourceMetricSource{
-						Name:                     corev1.ResourceCPU,
-						TargetAverageUtilization: pointer.Int32(hpaTargetAverageUtilizationCPU),
+		_, err = controllerutils.GetAndCreateOrMergePatch(ctx, k.client.Client(), hpaV2beta1, func() error {
+			hpaV2beta1.Spec = autoscalingv2beta1.HorizontalPodAutoscalerSpec{
+				MinReplicas: &k.values.Autoscaling.MinReplicas,
+				MaxReplicas: k.values.Autoscaling.MaxReplicas,
+				ScaleTargetRef: autoscalingv2beta1.CrossVersionObjectReference{
+					APIVersion: appsv1.SchemeGroupVersion.String(),
+					Kind:       "Deployment",
+					Name:       deployment.Name,
+				},
+				Metrics: []autoscalingv2beta1.MetricSpec{
+					{
+						Type: autoscalingv2beta1.ResourceMetricSourceType,
+						Resource: &autoscalingv2beta1.ResourceMetricSource{
+							Name:                     corev1.ResourceCPU,
+							TargetAverageUtilization: pointer.Int32(hpaTargetAverageUtilizationCPU),
+						},
+					},
+					{
+						Type: autoscalingv2beta1.ResourceMetricSourceType,
+						Resource: &autoscalingv2beta1.ResourceMetricSource{
+							Name:                     corev1.ResourceMemory,
+							TargetAverageUtilization: pointer.Int32(hpaTargetAverageUtilizationMemory),
+						},
 					},
 				},
-				{
-					Type: autoscalingv2beta1.ResourceMetricSourceType,
-					Resource: &autoscalingv2beta1.ResourceMetricSource{
-						Name:                     corev1.ResourceMemory,
-						TargetAverageUtilization: pointer.Int32(hpaTargetAverageUtilizationMemory),
-					},
-				},
-			},
-		},
+			}
+			return nil
+		})
 	}
-}
-
-func (k *kubeAPIServer) reconcileHorizontalPodAutoscaler(ctx context.Context, horizontalPodAutoscaler client.Object) error {
-	if k.values.Autoscaling.HVPAEnabled ||
-		k.values.Autoscaling.Replicas == nil ||
-		*k.values.Autoscaling.Replicas == 0 {
-
-		return kutil.DeleteObject(ctx, k.client.Client(), horizontalPodAutoscaler)
-	}
-
-	_, err := controllerutils.GetAndCreateOrMergePatch(ctx, k.client.Client(), horizontalPodAutoscaler, func() error {
-		return nil
-	})
 	return err
 }

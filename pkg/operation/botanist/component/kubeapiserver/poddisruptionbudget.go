@@ -16,6 +16,7 @@ package kubeapiserver
 
 import (
 	"context"
+	"fmt"
 
 	v1beta1constants "github.com/gardener/gardener/pkg/apis/core/v1beta1/constants"
 	"github.com/gardener/gardener/pkg/controllerutils"
@@ -28,36 +29,56 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func (k *kubeAPIServer) getPodDisruptionBudget() client.Object {
-	pdbMaxUnavailable := intstr.FromInt(1)
+func (k *kubeAPIServer) emptyPodDisruptionBudget() client.Object {
 	pdbObjectMeta := metav1.ObjectMeta{
 		Name:      v1beta1constants.DeploymentNameKubeAPIServer,
 		Namespace: k.namespace,
-		Labels:    getLabels(),
 	}
-	pdbSelector := &metav1.LabelSelector{MatchLabels: getLabels()}
 
 	if version.ConstraintK8sGreaterEqual121.Check(k.values.Version) {
 		return &policyv1.PodDisruptionBudget{
 			ObjectMeta: pdbObjectMeta,
-			Spec: policyv1.PodDisruptionBudgetSpec{
-				MaxUnavailable: &pdbMaxUnavailable,
-				Selector:       pdbSelector,
-			},
 		}
 	}
 	return &policyv1beta1.PodDisruptionBudget{
 		ObjectMeta: pdbObjectMeta,
-		Spec: policyv1beta1.PodDisruptionBudgetSpec{
-			MaxUnavailable: &pdbMaxUnavailable,
-			Selector:       pdbSelector,
-		},
 	}
 }
 
-func (k *kubeAPIServer) reconcilePodDisruptionBudget(ctx context.Context, podDisruptionBudget client.Object) error {
-	_, err := controllerutils.GetAndCreateOrMergePatch(ctx, k.client.Client(), podDisruptionBudget, func() error {
-		return nil
-	})
+func (k *kubeAPIServer) reconcilePodDisruptionBudget(ctx context.Context, obj client.Object) error {
+	var (
+		pdbMaxUnavailable = intstr.FromInt(1)
+		pdbSelector       = &metav1.LabelSelector{MatchLabels: getLabels()}
+		err               error
+	)
+
+	if version.ConstraintK8sGreaterEqual121.Check(k.values.Version) {
+		pdbV1, ok := obj.(*policyv1.PodDisruptionBudget)
+		if !ok {
+			return fmt.Errorf("expected policyv1.PodDisruptionBudget but got %T", obj)
+		}
+		_, err = controllerutils.GetAndCreateOrMergePatch(ctx, k.client.Client(), pdbV1, func() error {
+			pdbV1.Labels = getLabels()
+			pdbV1.Spec = policyv1.PodDisruptionBudgetSpec{
+				MaxUnavailable: &pdbMaxUnavailable,
+				Selector:       pdbSelector,
+			}
+			return nil
+		})
+	} else {
+		pdbV1beta1, ok := obj.(*policyv1beta1.PodDisruptionBudget)
+		if !ok {
+			return fmt.Errorf("expected policyv1beta1.PodDisruptionBudget but got %T", obj)
+		}
+		_, err = controllerutils.GetAndCreateOrMergePatch(ctx, k.client.Client(), pdbV1beta1, func() error {
+			pdbV1beta1.Labels = getLabels()
+			pdbV1beta1.Spec = policyv1beta1.PodDisruptionBudgetSpec{
+				MaxUnavailable: &pdbMaxUnavailable,
+				Selector:       pdbSelector,
+			}
+			return nil
+		})
+	}
+
 	return err
 }
