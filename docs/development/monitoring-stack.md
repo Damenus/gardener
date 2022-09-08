@@ -34,7 +34,7 @@ The Alertmanager in the Shoot namespace on the Seed is only responsible for forw
 
 After exploring the metrics which your component provides or adding new metrics, you should be aware which metrics are required to write the needed alerts and dashboards.
 
-Prometheus prefers a pull based metrics collection approach and therefore the targets to observe need to be defined upfront. The targets are defined in `charts/seed-monitoring/charts/prometheus/templates/config.yaml`.
+Prometheus prefers a pull based metrics collection approach and therefore the targets to observe need to be defined upfront. The targets are defined in `charts/seed-monitoring/charts/core/charts/prometheus/templates/config.yaml`.
 New scrape jobs can be added in the section `scrape_configs`. Detailed information how to configure scrape jobs and how to use the kubernetes service discovery are available in the [Prometheus documentation](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config).
 
 The `job_name` of a scrape job should be the name of the component e.g. `kube-apiserver` or `vpn`. The collection interval should be the default of `30s`. You do not need to specify this in the configuration.
